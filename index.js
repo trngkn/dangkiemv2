@@ -98,6 +98,9 @@ async function handleCaptcha(page) {
   return captchaText;
 }
 
+    const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome';
+
+    console.log('Browser launched');
 // Hàm chính thực hiện tra cứu
 async function performVehicleLookup(licensePlate, stickerNumber) {
   const browser = await puppeteer.launch({ headless: false });
