@@ -173,26 +173,56 @@ async function performVehicleLookup(licensePlate, stickerNumber) {
 
 // API endpoint
 app.post('/api/vehicle-lookup', async (req, res) => {
-  const { licensePlate, stickerNumber } = req.body;
+  const { licensePlate, stickerNumber, returnBase64 = true } = req.body;
 
-  // Validate input
   if (!licensePlate || !stickerNumber) {
-    return res.status(400).json({
-      success: false,
-      error: 'Thiếu thông tin bắt buộc: biển số và số tem'
-    });
+    return res.status(400).json({ error: 'Vui lòng cung cấp đầy đủ biển số và số tem' });
   }
 
   try {
     const result = await performVehicleLookup(licensePlate, stickerNumber);
-    res.json(result);
+    
+    // Nếu yêu cầu trả về base64 (mặc định cho n8n)
+    if (returnBase64) {
+      try {
+        // Đọc file ảnh và chuyển sang base64
+        const imageBuffer = await fs.readFile(result.screenshot);
+        const base64Image = imageBuffer.toString('base64');
+        
+        // Trả về dữ liệu dạng base64 để n8n có thể xử lý
+        res.json({
+          success: result.success,
+          data: result.data,
+          screenshot: {
+            filename: path.basename(result.screenshot),
+            mimeType: 'image/png',
+            data: base64Image
+          },
+          // Thêm URL tạm thời nếu cần
+          screenshotUrl: `/screenshots/${path.basename(result.screenshot)}`
+        });
+      } catch (error) {
+        console.error('Lỗi khi đọc file ảnh:', error);
+        res.status(500).json({ 
+          error: 'Lỗi khi xử lý ảnh', 
+          details: error.message 
+        });
+      }
+    } else {
+      // Nếu không yêu cầu base64, trả về như cũ
+      res.json(result);
+    }
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Lỗi máy chủ nội bộ'
+    console.error('Lỗi khi xử lý yêu cầu:', error);
+    res.status(500).json({ 
+      error: 'Có lỗi xảy ra khi xử lý yêu cầu', 
+      details: error.message 
     });
   }
 });
+
+// Thêm route để phục vụ file ảnh tĩnh
+app.use('/screenshots', express.static(__dirname));
 
 // Start server
 const PORT = process.env.PORT || 3000;
