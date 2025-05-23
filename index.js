@@ -33,15 +33,30 @@ app.use(express.json());
 // Hàm xử lý captcha
 async function handleCaptcha(page) {
   const imagePath = 'temp_captcha_image.png';
-  
-  // Lấy URL hình ảnh captcha
-  const imageUrl = await page.evaluate(() => {
-    const img = document.querySelector('#captchaImage');
-    return img ? img.src : null;
-  });
+
+  let imageUrl = null;
+  let retryImage = 0;
+  const MAX_IMAGE_RETRY = 3;
+
+  // Thử lại load captcha tối đa 3 lần nếu không tìm thấy ảnh
+  while (retryImage < MAX_IMAGE_RETRY) {
+    imageUrl = await page.evaluate(() => {
+      const img = document.querySelector('#captchaImage');
+      return img ? img.src : null;
+    });
+
+    if (imageUrl) break;
+
+    retryImage++;
+    if (retryImage < MAX_IMAGE_RETRY) {
+      // Reload lại trang nếu chưa hết số lần thử
+      await page.goto('http://app.vr.org.vn/ptpublic/thongtinptpublic.aspx', { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
 
   if (!imageUrl) {
-    throw new Error('Không tìm thấy hình ảnh captcha trên trang.');
+    throw new Error('Không tìm thấy hình ảnh captcha trên trang sau 3 lần thử.');
   }
 
   // Tải và xử lý hình ảnh
