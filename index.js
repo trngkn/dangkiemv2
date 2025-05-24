@@ -33,30 +33,15 @@ app.use(express.json());
 // Hàm xử lý captcha
 async function handleCaptcha(page) {
   const imagePath = 'temp_captcha_image.png';
-
-  let imageUrl = null;
-  let retryImage = 0;
-  const MAX_IMAGE_RETRY = 3;
-
-  // Thử lại load captcha tối đa 3 lần nếu không tìm thấy ảnh
-  while (retryImage < MAX_IMAGE_RETRY) {
-    imageUrl = await page.evaluate(() => {
-      const img = document.querySelector('#captchaImage');
-      return img ? img.src : null;
-    });
-
-    if (imageUrl) break;
-
-    retryImage++;
-    if (retryImage < MAX_IMAGE_RETRY) {
-      // Reload lại trang nếu chưa hết số lần thử
-      await page.goto('http://app.vr.org.vn/ptpublic/thongtinptpublic.aspx', { waitUntil: 'networkidle2' });
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
+  
+  // Lấy URL hình ảnh captcha
+  const imageUrl = await page.evaluate(() => {
+    const img = document.querySelector('#captchaImage');
+    return img ? img.src : null;
+  });
 
   if (!imageUrl) {
-    throw new Error('Không tìm thấy hình ảnh captcha trên trang sau 3 lần thử.');
+    throw new Error('Không tìm thấy hình ảnh captcha trên trang.');
   }
 
   // Tải và xử lý hình ảnh
@@ -114,7 +99,8 @@ async function handleCaptcha(page) {
 }
 
 // Hàm chính thực hiện tra cứu
-async function performVehicleLookup(licensePlate, stickerNumber) {
+async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0) {
+  const MAX_RETRIES = 1; // Số lần thử lại tối đa
   const browser = await puppeteer.launch({
     headless: 'new',
     args: [
@@ -146,7 +132,6 @@ async function performVehicleLookup(licensePlate, stickerNumber) {
 
     // Gửi form
     await new Promise(resolve => setTimeout(resolve, 2000));
-    // Sử dụng submit form thay vì click để đảm bảo form được gửi chính xác
     await page.evaluate(() => {
       const form = document.getElementById('Form1');
       form.submit();
@@ -154,6 +139,20 @@ async function performVehicleLookup(licensePlate, stickerNumber) {
 
     // Chờ một chút để trang tải kết quả
     await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Kiểm tra xem có thông báo lỗi không
+    const hasError = await page.evaluate(() => {
+      const errorElement = document.getElementById('lblErrMsg');
+      return errorElement && errorElement.textContent.trim() !== '';
+    });
+
+    if (hasError && retryCount < MAX_RETRIES) {
+      console.log(`Phát hiện lỗi, thử lại lần ${retryCount + 1}...`);
+      await browser.close();
+      return performVehicleLookup(licensePlate, stickerNumber, retryCount + 1);
+    } else if (hasError) {
+      throw new Error('Đã vượt quá số lần thử lại tối đa');
+    }
 
     // Chụp ảnh màn hình
     const screenshotPath = `result_${Date.now()}.png`;
