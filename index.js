@@ -129,7 +129,7 @@ async function handleCaptcha(page, retryCount = 0) {
 async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0) {
   const MAX_RETRIES = 1; // Số lần thử lại tối đa
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: 'new',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
