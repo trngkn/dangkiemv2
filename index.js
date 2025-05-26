@@ -229,6 +229,11 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
         return errorElement ? errorElement.textContent.trim() : 'Lỗi không xác định';
       });
       
+      // Return immediately if the error is 'vehicle not found'
+      if (errorMessage === 'Không tìm thấy thông tin phương tiện này.') {
+        throw new Error(errorMessage);
+      }
+      
       if (retryCount < MAX_RETRIES) {
         console.log(`Phát hiện lỗi "${errorMessage}", thử lại lần ${retryCount + 1}/${MAX_RETRIES}...`);
         await browser.close();
