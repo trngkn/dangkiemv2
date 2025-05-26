@@ -36,24 +36,23 @@ async function handleCaptcha(page, retryCount = 0) {
   const imagePath = 'temp_captcha_image.png';
   
   try {
-    // Lấy URL hình ảnh captcha
-    const imageUrl = await page.evaluate(() => {
-      const img = document.querySelector('#captchaImage');
-      return img ? img.src : null;
+    // Đảm bảo phần tử captcha tồn tại và hiển thị
+    await page.waitForSelector('#captchaImage', { visible: true, timeout: 5000 });
+    
+    // Chụp màn hình chỉ phần tử captcha
+    const captchaElement = await page.$('#captchaImage');
+    if (!captchaElement) {
+      throw new Error('Không tìm thấy phần tử captcha trên trang.');
+    }
+    
+    // Chụp ảnh phần tử captcha
+    await captchaElement.screenshot({ 
+      path: imagePath,
+      type: 'png',
+      omitBackground: true
     });
-
-    if (!imageUrl) {
-      throw new Error('Không tìm thấy hình ảnh captcha trên trang.');
-    }
-
-    // Tải hình ảnh
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      throw new Error(`Tải hình ảnh thất bại: ${response.statusText}`);
-    }
-
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(imagePath, Buffer.from(buffer));
+    
+    console.log('Đã chụp ảnh captcha thành công');
     
     // Khởi tạo Gemini API
     const apiKey = process.env.GOOGLE_API_KEY;
@@ -72,10 +71,10 @@ async function handleCaptcha(page, retryCount = 0) {
       ],
     });
 
-    // Gửi ảnh lên Gemini để nhận diện
+    // Đọc ảnh đã chụp
     const imageBuffer = await fs.readFile(imagePath);
     const imageBase64 = imageBuffer.toString('base64');
-    const mimeType = response.headers.get('content-type') || 'image/png';
+    const mimeType = 'image/png'; // Luôn là PNG vì chúng ta chụp màn hình
 
     const result = await model.generateContent([
       "Hãy nhận diện các ký tự trong ảnh captcha này. Chỉ trả về các ký tự đó, không giải thích gì thêm.",
@@ -127,7 +126,9 @@ async function handleCaptcha(page, retryCount = 0) {
 
 // Hàm chính thực hiện tra cứu
 async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0) {
-  const MAX_RETRIES = 1; // Số lần thử lại tối đa
+  const MAX_RETRIES = 3; // Tăng số lần thử lại tối đa lên 3
+  const RETRY_DELAY = 2000; // Thời gian chờ giữa các lần thử (ms)
+  
   const browser = await puppeteer.launch({
     headless: 'new',
     args: [
@@ -139,33 +140,82 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
       '--single-process'
     ]
   });
+  
   const page = await browser.newPage();
+  
+  // Bật request interception để tối ưu hiệu suất
+  await page.setRequestInterception(true);
+  page.on('request', (request) => {
+    // Bỏ qua các request không cần thiết như hình ảnh, stylesheet, font
+    if (['stylesheet', 'font', 'media'].includes(request.resourceType())) {
+      request.abort();
+    } else {
+      request.continue();
+    }
+  });
 
   try {
-    // Truy cập trang web
-    await page.goto('http://app.vr.org.vn/ptpublic/thongtinptpublic.aspx', { waitUntil: 'networkidle2' });
+    console.log(`Đang thực hiện tra cứu lần ${retryCount + 1}...`);
+    
+    // Truy cập trang web với timeout
+    await page.goto('http://app.vr.org.vn/ptpublic/thongtinptpublic.aspx', {
+      waitUntil: 'networkidle2',
+      timeout: 30000
+    });
+    
+    // Đợi cho đến khi trang tải xong
+    //await page.waitForSelector('body', { timeout: 10000 });
+    //await new Promise(resolve => setTimeout(resolve, 2000));
 
     // Xử lý captcha
-    await handleCaptcha(page);
+    try {
+      await handleCaptcha(page);
+    } catch (captchaError) {
+      console.error('Lỗi khi xử lý captcha:', captchaError.message);
+      throw new Error(`Lỗi captcha: ${captchaError.message}`);
+    }
 
-    // Nhập thông tin
-    await page.click('#txtBienDK');
-    await new Promise(resolve => setTimeout(resolve, 100));
-    await page.type('#txtBienDK', licensePlate);
-
-    await page.click('#TxtSoTem');
-    await new Promise(resolve => setTimeout(resolve, 100));
-    await page.type('#TxtSoTem', stickerNumber);
+    // Nhập thông tin biển số
+    try {
+      await page.waitForSelector('#txtBienDK', { visible: true, timeout: 5000 });
+      await page.click('#txtBienDK');
+      await page.type('#txtBienDK', licensePlate, { delay: 50 });
+      
+      await page.waitForSelector('#TxtSoTem', { visible: true, timeout: 5000 });
+      await page.click('#TxtSoTem');
+      await page.type('#TxtSoTem', stickerNumber, { delay: 50 });
+    } catch (inputError) {
+      console.error('Lỗi khi nhập thông tin:', inputError.message);
+      throw new Error(`Lỗi nhập liệu: ${inputError.message}`);
+    }
 
     // Gửi form
-    await new Promise(resolve => setTimeout(resolve, 200));
-    await page.evaluate(() => {
-      const form = document.getElementById('Form1');
-      form.submit();
-    });
+    try {
+      await page.waitForSelector('#Form1', { timeout: 5000 });
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 10000 }),
+        page.evaluate(() => {
+          const form = document.getElementById('Form1');
+          if (form) form.submit();
+        })
+      ]);
+    } catch (submitError) {
+      console.error('Lỗi khi gửi form:', submitError.message);
+      // Thử cách khác nếu cách trên thất bại
+      await page.click('input[type="submit"]');
+      
+    }
 
-    // Chờ một chút để trang tải kết quả
+    // Chờ trang tải xong sau khi submit
     await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Chụp màn hình kết quả
+    try {
+      await page.screenshot({ path: 'result.png', fullPage: true });
+      console.log('Đã chụp màn hình kết quả thành công');
+    } catch (screenshotError) {
+      console.error('Lỗi khi chụp màn hình kết quả:', screenshotError.message);
+    }
 
     // Kiểm tra xem có thông báo lỗi không
     const hasError = await page.evaluate(() => {
@@ -173,12 +223,20 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
       return errorElement && errorElement.textContent.trim() !== '';
     });
 
-    if (hasError && retryCount < MAX_RETRIES) {
-      console.log(`Phát hiện lỗi, thử lại lần ${retryCount + 1}...`);
-      await browser.close();
-      return performVehicleLookup(licensePlate, stickerNumber, retryCount + 1);
-    } else if (hasError) {
-      throw new Error('Đã vượt quá số lần thử lại tối đa');
+    if (hasError) {
+      const errorMessage = await page.evaluate(() => {
+        const errorElement = document.getElementById('lblErrMsg');
+        return errorElement ? errorElement.textContent.trim() : 'Lỗi không xác định';
+      });
+      
+      if (retryCount < MAX_RETRIES) {
+        console.log(`Phát hiện lỗi "${errorMessage}", thử lại lần ${retryCount + 1}/${MAX_RETRIES}...`);
+        await browser.close();
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        return performVehicleLookup(licensePlate, stickerNumber, retryCount + 1);
+      } else {
+        throw new Error(`Đã thử lại ${MAX_RETRIES} lần nhưng vẫn gặp lỗi: ${errorMessage}`);
+      }
     }
 
     // Chụp ảnh màn hình
