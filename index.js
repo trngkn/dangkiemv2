@@ -31,78 +31,105 @@ const app = express();
 app.use(express.json());
 
 // Hàm xử lý captcha
-async function handleCaptcha(page) {
+async function handleCaptcha(page, retryCount = 0) {
+  const MAX_RETRIES = 3;
   const imagePath = 'temp_captcha_image.png';
   
-  // Lấy URL hình ảnh captcha
-  const imageUrl = await page.evaluate(() => {
-    const img = document.querySelector('#captchaImage');
-    return img ? img.src : null;
-  });
+  try {
+    // Lấy URL hình ảnh captcha
+    const imageUrl = await page.evaluate(() => {
+      const img = document.querySelector('#captchaImage');
+      return img ? img.src : null;
+    });
 
-  if (!imageUrl) {
-    throw new Error('Không tìm thấy hình ảnh captcha trên trang.');
-  }
+    if (!imageUrl) {
+      throw new Error('Không tìm thấy hình ảnh captcha trên trang.');
+    }
 
-  // Tải và xử lý hình ảnh
-  const response = await fetch(imageUrl);
-  if (!response.ok) {
-    throw new Error(`Tải hình ảnh thất bại: ${response.statusText}`);
-  }
+    // Tải hình ảnh
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`Tải hình ảnh thất bại: ${response.statusText}`);
+    }
 
-  const buffer = await response.arrayBuffer();
-  await fs.writeFile(imagePath, Buffer.from(buffer));
+    const buffer = await response.arrayBuffer();
+    await fs.writeFile(imagePath, Buffer.from(buffer));
+    
+    // Khởi tạo Gemini API
+    const apiKey = process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      throw new Error("GOOGLE_API_KEY chưa được thiết lập");
+    }
+    
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-1.5-flash-latest',
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+          threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        },
+      ],
+    });
 
-  // Khởi tạo Gemini API
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey) {
-    throw new Error("GOOGLE_API_KEY chưa được thiết lập");
-  }
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash-latest',
-    safetySettings: [
+    // Gửi ảnh lên Gemini để nhận diện
+    const imageBuffer = await fs.readFile(imagePath);
+    const imageBase64 = imageBuffer.toString('base64');
+    const mimeType = response.headers.get('content-type') || 'image/png';
+
+    const result = await model.generateContent([
+      "Hãy nhận diện các ký tự trong ảnh captcha này. Chỉ trả về các ký tự đó, không giải thích gì thêm.",
       {
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        inlineData: {
+          data: imageBase64,
+          mimeType: mimeType,
+        },
       },
-    ],
-  });
+    ]);
 
-  // Gửi ảnh lên Gemini để nhận diện
-  const imageBuffer = await fs.readFile(imagePath);
-  const imageBase64 = imageBuffer.toString('base64');
-  const mimeType = response.headers.get('content-type') || 'image/png';
+    const recognizedText = await result.response.text();
+    const captchaText = recognizedText.replace(/[^A-Za-z0-9]/g, '');
 
-  const result = await model.generateContent([
-    "Hãy nhận diện các ký tự trong ảnh captcha này. Chỉ trả về các ký tự đó, không giải thích gì thêm.",
-    {
-      inlineData: {
-        data: imageBase64,
-        mimeType: mimeType,
-      },
-    },
-  ]);
+    // Nhập captcha
+    await page.click('#txtCaptcha');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await page.type('#txtCaptcha', captchaText);
 
-  const recognizedText = await result.response.text();
-  const captchaText = recognizedText.replace(/[^A-Za-z0-9]/g, '');
+    // Xóa file tạm
+    await fs.unlink(imagePath);
 
-  // Nhập captcha
-  await page.click('#txtCaptcha');
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  await page.type('#txtCaptcha', captchaText);
-
-  // Xóa file tạm
-  await fs.unlink(imagePath);
-
-  return captchaText;
+    return captchaText;
+    
+  } catch (error) {
+    // Xóa file tạm nếu có lỗi
+    try {
+      await fs.unlink(imagePath).catch(() => {});
+    } catch (e) {}
+    
+    // Nếu có lỗi và chưa vượt quá số lần thử lại
+    if (retryCount < MAX_RETRIES) {
+      console.log(`Lỗi khi xử lý captcha, thử lại lần ${retryCount + 1}...`);
+      
+      // Làm mới trang để lấy captcha mới
+      await page.reload({ waitUntil: 'networkidle0' });
+      
+      // Đợi một chút để trang tải xong
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Thử lại với số lần thử tăng lên
+      return handleCaptcha(page, retryCount + 1);
+    }
+    
+    // Nếu đã thử đủ số lần mà vẫn lỗi
+    throw new Error(`Không thể xử lý captcha sau ${MAX_RETRIES} lần thử: ${error.message}`);
+  }
 }
 
 // Hàm chính thực hiện tra cứu
 async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0) {
-  const MAX_RETRIES = 3; // Số lần thử lại tối đa
+  const MAX_RETRIES = 1; // Số lần thử lại tối đa
   const browser = await puppeteer.launch({
-    headless: 'new',
+    headless: false,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -123,15 +150,15 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
 
     // Nhập thông tin
     await page.click('#txtBienDK');
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 100));
     await page.type('#txtBienDK', licensePlate);
 
     await page.click('#TxtSoTem');
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 100));
     await page.type('#TxtSoTem', stickerNumber);
 
     // Gửi form
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 200));
     await page.evaluate(() => {
       const form = document.getElementById('Form1');
       form.submit();
@@ -171,17 +198,36 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
       return resultElement ? resultElement.innerHTML : 'Không tìm thấy kết quả';
     });
 
-    return {
+    // Lưu kết quả trước khi xoá cookie
+    const finalResult = {
       success: true,
       data: result,
       screenshot: screenshotPath
     };
 
+    // Xoá tất cả cookie sau khi hoàn thành
+    try {
+      const cookies = await page.cookies();
+      if (cookies && cookies.length > 0) {
+        await page.deleteCookie(...cookies);
+        console.log('Đã xoá tất cả cookie');
+      }
+    } catch (cookieError) {
+      console.warn('Không thể xoá cookie:', cookieError.message);
+    }
+
+    return finalResult;
+
   } catch (error) {
     console.error('Lỗi khi tra cứu:', error);
     throw error;
   } finally {
-    await browser.close();
+    // Đảm bảo trình duyệt luôn được đóng
+    try {
+      await browser.close();
+    } catch (e) {
+      console.error('Lỗi khi đóng trình duyệt:', e.message);
+    }
   }
 }
 
