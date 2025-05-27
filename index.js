@@ -127,7 +127,7 @@ async function handleCaptcha(page, retryCount = 0) {
 // Hàm chính thực hiện tra cứu
 async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0) {
   const MAX_RETRIES = 3; // Tăng số lần thử lại tối đa lên 3
-  const RETRY_DELAY = 2000; // Thời gian chờ giữa các lần thử (ms)
+  const RETRY_DELAY = 1500; // Thời gian chờ giữa các lần thử (ms)
   
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -196,11 +196,25 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
           if (form) form.submit();
         })
       ]);
+      
+      // Kiểm tra xem có lỗi server không
+      const serverError = await page.evaluate(() => {
+        const h1 = document.querySelector('h1');
+        return h1 && h1.textContent.includes('Server Error in') ? h1.textContent : null;
+      });
+      
+      if (serverError) {
+        throw new Error('Trang đăng kiểm bị lỗi, vui lòng kiểm tra thử bằng tay tại trang đăng kiểm và thử lại sau');
+      }
+      
     } catch (submitError) {
       console.error('Lỗi khi gửi form:', submitError.message);
-      // Thử cách khác nếu cách trên thất bại
-      await page.click('input[type="submit"]');
-      
+      // Nếu lỗi không phải là lỗi server, thử cách khác
+      if (!submitError.message.includes('Trang đăng kiểm bị lỗi')) {
+        await page.click('input[type="submit"]');
+      } else {
+        throw submitError; // Ném lại lỗi server để xử lý tiếp
+      }
     }
 
     // Chờ trang tải xong sau khi submit
