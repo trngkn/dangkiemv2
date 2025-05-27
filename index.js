@@ -163,9 +163,6 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
       timeout: 30000
     });
     
-    // Đợi cho đến khi trang tải xong
-    //await page.waitForSelector('body', { timeout: 10000 });
-    //await new Promise(resolve => setTimeout(resolve, 2000));
 
     // Xử lý captcha
     try {
@@ -255,16 +252,76 @@ async function performVehicleLookup(licensePlate, stickerNumber, retryCount = 0)
     // Lên lịch xoá ảnh sau 5 phút
     deleteFileAfterDelay(screenshotPath);
 
-    // Lấy kết quả từ trang
-    const result = await page.evaluate(() => {
-      const resultElement = document.querySelector('.result');
-      return resultElement ? resultElement.innerHTML : 'Không tìm thấy kết quả';
+    // Chờ cho div#panResult tải xong
+    await page.waitForSelector('#panResult', { visible: true, timeout: 10000 });
+    
+    // Lấy dữ liệu từ trang kết quả
+    const resultData = await page.evaluate(() => {
+      const result = {};
+      
+      // Lấy thông tin chung
+      const nhanHieu = document.getElementById('txtNhanHieu');
+      const soKhung = document.getElementById('txtSoKhung');
+      const loaiPT = document.getElementById('txtLoaiPT');
+      const soMay = document.getElementById('txtSoMay');
+      const kichThuocBao = document.getElementById('txtKichThuocBao');
+      const kichThuocThung = document.getElementById('txtKichThuocThung');
+      const tuTrongTK = document.getElementById('txtTuTrongTK');
+      const taiTrongGT = document.getElementById('txtTaiTrongGT');
+      const soCho = document.getElementById('txtSoCho');
+      const trLgToanBoGT = document.getElementById('txtTrLgToanBoGT');
+      const cdCsCtBx = document.getElementById('txtCdCsCtBx');
+      const trLgMoocCP = document.getElementById('txtTrLgMoocCP');
+      
+      // Lấy thông tin kiểm định
+      const ngayKD = document.getElementById('txtNgayKD');
+      const tramKD = document.getElementById('txtTramKD');
+      const soTemGCN = document.getElementById('txtSoTemGCN');
+      const hanKDToi = document.getElementById('txtHanKDToi');
+      
+      // Lấy thông tin nộp phí
+      const ngayNop = document.getElementById('txtNgayNop');
+      const donVi = document.getElementById('txtDonVi');
+      const blId = document.getElementById('txtBL_ID');
+      const denNgay = document.getElementById('txtDenNgay');
+      
+      // Thêm thông tin vào đối tượng kết quả
+      if (nhanHieu) result.nhanHieu = nhanHieu.textContent.trim();
+      if (soKhung) result.soKhung = soKhung.textContent.trim();
+      if (loaiPT) result.loaiPhuongTien = loaiPT.textContent.trim();
+      if (soMay) result.soMay = soMay.textContent.trim();
+      if (kichThuocBao) result.kichThuocBao = kichThuocBao.textContent.trim();
+      if (kichThuocThung) result.kichThuocThung = kichThuocThung.textContent.trim();
+      if (tuTrongTK) result.khoiLuongBanThan = tuTrongTK.textContent.trim();
+      if (taiTrongGT) result.taiTrongChoPhep = taiTrongGT.textContent.trim();
+      if (soCho) result.soChoNgoi = soCho.textContent.trim();
+      if (trLgToanBoGT) result.khoiLuongToanBo = trLgToanBoGT.textContent.trim();
+      if (cdCsCtBx) result.soTrucVaChieuDaiCoSo = cdCsCtBx.textContent.trim();
+      if (trLgMoocCP) result.khoiLuongKeoTheo = trLgMoocCP.textContent.trim();
+      
+      // Thông tin kiểm định
+      if (ngayKD) result.ngayKiemDinh = ngayKD.textContent.trim();
+      if (tramKD) result.donViKiemDinh = tramKD.textContent.trim();
+      if (soTemGCN) result.soTemGCN = soTemGCN.textContent.trim();
+      if (hanKDToi) result.hanHieuLucGCN = hanKDToi.textContent.trim();
+      
+      // Thông tin nộp phí
+      if (ngayNop) result.ngayNopPhi = ngayNop.textContent.trim();
+      if (donVi) result.donViThuPhi = donVi.textContent.trim();
+      if (blId) result.soBienLai = blId.textContent.trim();
+      if (denNgay) result.phiDenNgay = denNgay.textContent.trim();
+      
+      return Object.keys(result).length > 0 ? result : null;
     });
+    
+    if (!resultData) {
+      throw new Error('Không tìm thấy dữ liệu trong kết quả tra cứu');
+    }
 
     // Lưu kết quả trước khi xoá cookie
     const finalResult = {
       success: true,
-      data: result,
+      data: resultData,
       screenshot: screenshotPath
     };
 
